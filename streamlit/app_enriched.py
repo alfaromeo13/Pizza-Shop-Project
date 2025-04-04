@@ -11,7 +11,7 @@ pinot_port = os.environ.get("PINOT_PORT", 8099)
 conn = connect(pinot_host, pinot_port)
 
 st.set_page_config(layout="wide")
-st.title("All About That Dough Dashboard 🍕")
+st.title("Pizza Shop orders analytics 🍕")
 
 now = datetime.now()
 dt_string = now.strftime("%B %-d, %Y at %-I:%M:%S %p")
@@ -59,14 +59,15 @@ except Exception as e:
     st.warning(f"""Unable to connect to or query Apache Pinot [{pinot_host}:{pinot_port}] Exception: {e}""", icon="⚠️")
 
 if pinot_available:
+
     query = """
-    select count(*) FILTER(WHERE  ts > ago(%(nearTimeAgo)s)) AS events1Min,
-           count(*) FILTER(WHERE  ts <= ago(%(nearTimeAgo)s) AND ts > ago(%(timeAgo)s)) AS events1Min2Min,
-           sum("price") FILTER(WHERE  ts > ago(%(nearTimeAgo)s)) AS total1Min,
-           sum("price") FILTER(WHERE  ts <= ago(%(nearTimeAgo)s) AND ts > ago(%(timeAgo)s)) AS total1Min2Min
-    from orders
-    where ts > ago(%(timeAgo)s)
-    limit 1
+        select count(*) FILTER(WHERE  ts > ago(%(nearTimeAgo)s)) AS events1Min,
+            count(*) FILTER(WHERE  ts <= ago(%(nearTimeAgo)s) AND ts > ago(%(timeAgo)s)) AS events1Min2Min,
+            sum("price") FILTER(WHERE  ts > ago(%(nearTimeAgo)s)) AS total1Min,
+            sum("price") FILTER(WHERE  ts <= ago(%(nearTimeAgo)s) AND ts > ago(%(timeAgo)s)) AS total1Min2Min
+        from orders
+        where ts > ago(%(timeAgo)s)
+        limit 1
     """
 
     curs.execute(query, {
@@ -86,7 +87,7 @@ if pinot_available:
     )
 
     rev.metric(
-        label="Revenue in ₹",
+        label="Revenue in €",
         value="{:,.2f}".format(df['total1Min'].values[0]),
         delta="{:,.2f}".format(df['total1Min'].values[0] - df['total1Min2Min'].values[0]) if df['total1Min2Min'].values[0] > 0 else None
     )
@@ -95,7 +96,7 @@ if pinot_available:
     average_order_value_1min_2min = df['total1Min2Min'].values[0] / int(df['events1Min2Min'].values[0]) if int(df['events1Min2Min'].values[0]) > 0 else 0
 
     order_val.metric(
-        label="Average order value in ₹",
+        label="Average order value in €",
         value="{:,.2f}".format(average_order_value_1min),
         delta="{:,.2f}".format(average_order_value_1min - average_order_value_1min_2min) if average_order_value_1min_2min > 0 else None
     )
@@ -172,7 +173,7 @@ if pinot_available:
                 column_config={
                     "dateTime": "Time",
                     "status": "Status",
-                    "price": st.column_config.NumberColumn("Price", format="₹%.2f"),
+                    "price": st.column_config.NumberColumn("Price", format="%.2f€"),
                     "userId": st.column_config.NumberColumn("User ID", format="%d"),
                     "productsOrdered": st.column_config.NumberColumn("Quantity", help="Quantity of distinct products ordered", format="%d"),
                     "totalQuantity": st.column_config.NumberColumn("Total quantity", help="Total quantity ordered", format="%d"),
@@ -203,12 +204,12 @@ if pinot_available:
                 column_config={
                     "category": "Category",
                     "orders": st.column_config.NumberColumn("Number of orders", format="%d"),
-                    "quantity": st.column_config.NumberColumn("Total quantity ordered", format="$%d"),
+                    "quantity": st.column_config.NumberColumn("Total quantity ordered", format="%d"),
                     "quantityPerOrder": st.column_config.NumberColumn("Average quantity per order", format="%d"),
                 },
                 disabled=True
             )
-
+            
     curs.execute("""
     SELECT "product.name" AS product, 
             "product.image" AS image,
@@ -233,11 +234,12 @@ if pinot_available:
                 "product": "Product",
                 "image": st.column_config.ImageColumn(label="Image", width="medium"),
                 "orders": st.column_config.NumberColumn("Number of orders", format="%d"),
-                "quantity": st.column_config.NumberColumn("Total quantity ordered", format="$%d"),
+                "quantity": st.column_config.NumberColumn("Total quantity ordered", format="%d"),
                 "quantityPerOrder": st.column_config.NumberColumn("Average quantity per order", format="%d"),
             },
             disabled=True
         )
+
 
     curs.close()
 

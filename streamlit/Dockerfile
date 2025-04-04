@@ -13,4 +13,6 @@ RUN pip install --upgrade pip
 
 COPY app.py .
 
-ENTRYPOINT ["streamlit", "run", "app.py"]
+# With this we override the file that was copied into the Docker image
+ENTRYPOINT ["streamlit", "run", "app.py"]  
+ 

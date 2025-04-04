@@ -1,4 +1,4 @@
-# Visualization project on Dominos Pizza Shop with Apache Pinot
+# Visualization project on Pizza Shop with Apache Pinot
 
 This repository contains the code for the Pizza Shop Demo, showcasing a real-time analytics application using Apache Pinot.
 
