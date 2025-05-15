@@ -1,6 +1,6 @@
 # Visualization project on Pizza Shop with Apache Pinot
 
-A project showcasing a real-time analytics application using Apache Pinot.
+A project showcasing a real-time analytics application using Apache Pinot. <br>
 Only prerequisites is to have docker installed on your machine before starting the demo.
 
 ## Architecture Diagram
