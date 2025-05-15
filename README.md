@@ -8,7 +8,7 @@ Only prerequisites is to have docker installed on your machine before starting t
 
 ## Architecture Diagram
 
- [Architecture Diagram](images/architecture.png)
+ [Architecture Diagram](images/archtecture.png)
 
 ## How to Run the Demo
 
