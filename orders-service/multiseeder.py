@@ -55,7 +55,7 @@ try:
 
             print("Getting product ID and PRICE as tuples...")
             cursor.execute("SELECT id, price FROM pizzashop.products")
-            product_prices = [(row[0], row[1]) for row in cursor]
+            product_prices = [(row[0], row[1]) for row in cursor] # product along with price 
             print(product_prices)
 
             while True:
