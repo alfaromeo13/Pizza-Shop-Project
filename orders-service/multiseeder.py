@@ -1,7 +1,5 @@
 import random, time
 from mysql.connector import connect, Error
-from faker import Faker
-from faker.providers import company
 import json
 from kafka import KafkaProducer
 import datetime
