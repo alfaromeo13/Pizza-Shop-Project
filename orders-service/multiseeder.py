@@ -24,7 +24,6 @@ print(f"Kafka broker: {kafkaHostPort}")
 producer = KafkaProducer(bootstrap_servers=kafkaHostPort, api_version=(7, 1, 0), 
   value_serializer=lambda m: json.dumps(m).encode('utf-8'))
 
-
 events_processed = 0
 try:
     with connect(
@@ -60,7 +59,7 @@ try:
             print(product_prices)
 
             while True:
-                # Get a random a user and a product to order
+                # Get a random user and a product to order
 
                 number_of_items = random.randint(1,10)
 
