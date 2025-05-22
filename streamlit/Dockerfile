@@ -15,4 +15,3 @@ COPY app.py .
 
 # With this we override the file that was copied into the Docker image
 ENTRYPOINT ["streamlit", "run", "app.py"]  
- 

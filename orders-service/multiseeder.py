@@ -6,6 +6,7 @@ import datetime
 import uuid
 import math
 import os
+import random
 
 # CONFIG
 usersLimit         = 1000
@@ -18,6 +19,13 @@ debeziumHostPort   = 'debezium:8083'
 kafkaHostPort      = f"{os.environ.get('KAFKA_BROKER_HOSTNAME', 'localhost')}:{os.environ.get('KAFKA_BROKER_PORT', '29092')}"
 
 print(f"Kafka broker: {kafkaHostPort}")
+
+def random_iso_date_2019_2024():
+    start_date = datetime.datetime(2019, 1, 1)
+    end_date = datetime.datetime(2024, 12, 31, 23, 59, 59, 999999)  # include microseconds
+    random_ts = random.uniform(start_date.timestamp(), end_date.timestamp())  # float timestamp to include fractional seconds
+    random_dt = datetime.datetime.fromtimestamp(random_ts)
+    return random_dt.isoformat()
 
 producer = KafkaProducer(bootstrap_servers=kafkaHostPort, api_version=(7, 1, 0), 
   value_serializer=lambda m: json.dumps(m).encode('utf-8'))
@@ -85,6 +93,17 @@ try:
                 }
 
                 producer.send('orders', event, bytes(event["id"].encode("UTF-8")))
+
+                event2 = {
+                    "id": str(uuid.uuid4()),
+                    "createdAt": random_iso_date_2019_2024(),
+                    "userId": user,
+                    "status": "PLACED_ORDER",
+                    "price": total_price,
+                    "items": items   
+                }
+
+                producer.send('orders', event2, bytes(event2["id"].encode("UTF-8")))
 
                 events_processed += 1
                 if events_processed % 100 == 0:

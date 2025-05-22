@@ -6,7 +6,6 @@ import os
 import time
 import plotly.graph_objects as go
 import plotly.express as px
-from pandas.api.types import is_datetime64_any_dtype as is_datetime
 
 pinot_host = os.environ.get("PINOT_SERVER", "pinot-broker")
 pinot_port = os.environ.get("PINOT_PORT", 8099)
@@ -280,6 +279,7 @@ if pinot_available:
         col_hist_orders, col_hist_revenue = st.columns(2)
         with col_hist_orders:
             st.plotly_chart(fig_orders_hist, use_container_width=True)
+            
         with col_hist_revenue:
             st.plotly_chart(fig_revenue_hist, use_container_width=True)
 
@@ -338,7 +338,7 @@ if pinot_available:
             curs.execute(top_users_query)
             df_top_users = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
 
-            if not df_top_users.empty:
+            if not df_top_users.empty: 
                 df_top_users["user_label"] = df_top_users.apply(
                     lambda row: f"User ID: {int(row['userId'])}", axis=1
                 )
@@ -448,87 +448,120 @@ if pinot_available:
     A, B = st.columns(2)
 
     with A:
-        # --- HEATMAP: Hourly Order Activity by Day of Week ---
-        if time_ago == "Custom":
-            heatmap_query = f"""
-                SELECT 
-                    DAYOFWEEK(ts) AS weekday, 
-                    HOUR(ts) AS hour, 
-                    COUNT(*) AS order_count
-                FROM orders
-                WHERE ts BETWEEN '{start_str}' AND '{end_str}'
-                GROUP BY weekday, hour
-            """
-        else:
-            heatmap_query = f"""
-                SELECT 
-                    DAYOFWEEK(ts) AS weekday, 
-                    HOUR(ts) AS hour, 
-                    COUNT(*) AS order_count
-                FROM orders
-                WHERE ts > ago('{mapping2[time_ago]['period']}')
-                GROUP BY weekday, hour
-            """
+        with st.container(border=True):
+            st.subheader("Order Activity Heatmap")
+            # --- HEATMAP: Hourly Order Activity by Day of Week ---
+            if time_ago == "Custom":
+                heatmap_query = f"""
+                    SELECT 
+                        DAYOFWEEK(ts) AS weekday, 
+                        HOUR(ts) AS hour, 
+                        COUNT(*) AS order_count
+                    FROM orders
+                    WHERE ts BETWEEN '{start_str}' AND '{end_str}'
+                    GROUP BY weekday, hour
+                """
+            else:
+                heatmap_query = f"""
+                    SELECT 
+                        DAYOFWEEK(ts) AS weekday, 
+                        HOUR(ts) AS hour, 
+                        COUNT(*) AS order_count
+                    FROM orders
+                    WHERE ts > ago('{mapping2[time_ago]['period']}')
+                    GROUP BY weekday, hour
+                """
 
-        curs.execute(heatmap_query)
-        df_heat = pd.DataFrame(curs, columns=[item[0] for item in curs.description])  # df_heat always defined
+            curs.execute(heatmap_query)
+            df_heat = pd.DataFrame(curs, columns=[item[0] for item in curs.description])  # df_heat always defined
 
-        if df_heat.empty:
-            st.info("No order activity to show for this period.")
-        else:
-            day_labels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-            df_heat["weekday"] = df_heat["weekday"].apply(lambda x: day_labels[int(x) - 1])
+            if df_heat.empty:
+                st.info("No order activity to show for this period.")
+            else:
+                day_labels = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+                df_heat["weekday"] = df_heat["weekday"].apply(lambda x: day_labels[int(x) - 1])
 
-            heatmap_df = df_heat.pivot(index="weekday", columns="hour", values="order_count").fillna(0)
+                heatmap_df = df_heat.pivot(index="weekday", columns="hour", values="order_count").fillna(0)
 
-            fig_heatmap = px.imshow(
-                heatmap_df,
-                labels=dict(x="Hour of Day", y="Day of Week", color="Orders"),
-                x=heatmap_df.columns,
-                y=heatmap_df.index,
-                color_continuous_scale="Blues"
-            )
-            fig_heatmap.update_layout(title="Order Activity Heatmap")
-            st.plotly_chart(fig_heatmap, use_container_width=True)
+                fig_heatmap = px.imshow(
+                    heatmap_df,
+                    labels=dict(x="Hour of Day", y="Day of Week", color="Orders"),
+                    x=heatmap_df.columns,
+                    y=heatmap_df.index,
+                    color_continuous_scale="Blues"
+                )
+                st.plotly_chart(fig_heatmap, use_container_width=True)
     with B:
-        # --- BAR PLOT: Monthly Revenue Trend ---
-        if time_ago == "Custom":
-            monthly_query = f"""
-                SELECT 
-                    DATETRUNC('MONTH', ts) AS month,
-                    SUM(price) AS monthly_revenue
-                FROM orders
-                WHERE ts BETWEEN '{start_str}' AND '{end_str}'
-                GROUP BY DATETRUNC('MONTH', ts)
-                ORDER BY month
-            """
-        else:
-            monthly_query = f"""
-                SELECT 
-                    DATETRUNC('MONTH', ts) AS month,
-                    SUM(price) AS monthly_revenue
-                FROM orders
-                WHERE ts > ago('{mapping2[time_ago]['period']}')
-                GROUP BY DATETRUNC('MONTH', ts)
-                ORDER BY month
+        with st.container(border=True):
+            st.subheader("Revenue Contribution by Product Category")
+
+            query_treemap = f"""
+                SELECT product.category AS category, SUM(product.price) AS revenue
+                FROM order_items_enriched
+                WHERE {where_clause}
+                GROUP BY product.category
             """
 
-        curs.execute(monthly_query)
-        df_monthly = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
+            curs.execute(query_treemap)
+            df_treemap = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
 
-        if not df_monthly.empty:
-            fig_monthly = px.bar(
-                df_monthly,
-                x="month",
-                y="monthly_revenue",
-                title="Monthly Revenue Trend",
-                labels={"monthly_revenue": "Revenue (€)", "month": "Month"},
-                color_discrete_sequence=["#4C78A8"]
-            )
-            fig_monthly.update_layout(xaxis_tickangle=-45)
-            st.plotly_chart(fig_monthly, use_container_width=True)
+            if not df_treemap.empty:
+                fig_treemap = px.treemap(
+                df_treemap,
+                path=[px.Constant("all"), 'category'],  # Add a root node explicitly
+                values='revenue',
+                color='revenue',
+                color_continuous_scale='RdBu'
+                )
 
+                fig_treemap.update_traces(root_color="white") 
 
+                fig_treemap.update_layout(
+                    paper_bgcolor='white',
+                    margin=dict(t=50, l=25, r=25, b=25)
+                )
+
+                st.plotly_chart(fig_treemap, use_container_width=True)
+            else:
+                st.info("No revenue data available for selected time range.")
+
+    # --- BAR PLOT: Monthly Revenue Trend ---
+    if time_ago == "Custom":
+        monthly_query = f"""
+            SELECT 
+                DATETRUNC('MONTH', ts) AS month,
+                SUM(price) AS monthly_revenue
+            FROM orders
+            WHERE ts BETWEEN '{start_str}' AND '{end_str}'
+            GROUP BY DATETRUNC('MONTH', ts)
+            ORDER BY month
+        """
+    else:
+        monthly_query = f"""
+            SELECT 
+                DATETRUNC('MONTH', ts) AS month,
+                SUM(price) AS monthly_revenue
+            FROM orders
+            WHERE ts > ago('{mapping2[time_ago]['period']}')
+            GROUP BY DATETRUNC('MONTH', ts)
+            ORDER BY month
+        """
+
+    curs.execute(monthly_query)
+    df_monthly = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
+
+    if not df_monthly.empty:
+        fig_monthly = px.bar(
+            df_monthly,
+            x="month",
+            y="monthly_revenue",
+            title="Monthly Revenue Trend",
+            labels={"monthly_revenue": "Revenue (€)", "month": "Month"},
+            color_discrete_sequence=["#4C78A8"]
+        )
+        fig_monthly.update_layout(xaxis_tickangle=-45)
+        st.plotly_chart(fig_monthly, use_container_width=True)
+            
     curs.close()
 
 if auto_refresh:

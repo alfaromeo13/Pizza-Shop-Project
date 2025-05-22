@@ -5,7 +5,7 @@
         "timeColumnName": "ts",
         "timeType": "MILLISECONDS",
         "retentionTimeUnit": "DAYS",
-        "retentionTimeValue": "1",
+        "retentionTimeValue": "3650",
         "schemaName": "order_items_enriched",
         "replicasPerPartition": "1"
     },
