@@ -1,14 +1,13 @@
-import random, time
-from mysql.connector import connect, Error
+import os
 import json
-from kafka import KafkaProducer
-import datetime
 import uuid
 import math
-import os
 import random
+import time
+from kafka import KafkaProducer
+from mysql.connector import connect, Error
+from datetime import date, timedelta, datetime  
 
-# CONFIG
 usersLimit         = 1000
 orderInterval      = 100
 mysqlHost          = os.environ.get("MYSQL_SERVER", "localhost")
@@ -18,19 +17,51 @@ mysqlPass          = 'mysqlpw'
 debeziumHostPort   = 'debezium:8083'
 kafkaHostPort      = f"{os.environ.get('KAFKA_BROKER_HOSTNAME', 'localhost')}:{os.environ.get('KAFKA_BROKER_PORT', '29092')}"
 
-print(f"Kafka broker: {kafkaHostPort}")
+# print(f"Kafka broker: {kafkaHostPort}")
 
-def random_iso_date_2019_2024():
-    start_date = datetime.datetime(2019, 1, 1)
-    end_date = datetime.datetime(2024, 12, 31, 23, 59, 59, 999999)  # include microseconds
-    random_ts = random.uniform(start_date.timestamp(), end_date.timestamp())  # float timestamp to include fractional seconds
-    random_dt = datetime.datetime.fromtimestamp(random_ts)
-    return random_dt.isoformat()
+def random_time_on_day(day: date) -> str:
+    random_seconds = random.randint(0, 86399)
+    full_datetime = datetime.combine(day, datetime.min.time()) + timedelta(seconds=random_seconds)
+    # Format with fixed 3 decimal places for milliseconds:
+    return full_datetime.strftime('%Y-%m-%dT%H:%M:%S.%f')
+
+def daterange_weekdays(start_date, end_date):
+    current = start_date
+    while current <= end_date:
+        if current.weekday() < 5:  # 0 = Monday, 6 = Sunday
+            yield current
+        current += timedelta(days=1)
+
+def generate_items(product_prices, num_items):
+    items = []
+    for _ in range(num_items):
+        product = random.choice(product_prices)
+        quantity = random.randint(1, 5)
+        items.append({
+            "productId": str(product[0]),
+            "quantity": quantity,
+            "price": product[1]
+        })
+    return items
+
+def calculate_total_price(items):
+    return round(math.fsum(item["quantity"] * item["price"] for item in items), 2)
+
+def create_event(user, items, status, timestamp):
+    return {
+        "id": str(uuid.uuid4()),
+        "createdAt": timestamp,
+        "userId": user,
+        "status": status,
+        "price": calculate_total_price(items),
+        "items": items
+    }
 
 producer = KafkaProducer(bootstrap_servers=kafkaHostPort, api_version=(7, 1, 0), 
   value_serializer=lambda m: json.dumps(m).encode('utf-8'))
 
 events_processed = 0
+
 try:
     with connect(
         host=mysqlHost,
@@ -38,8 +69,10 @@ try:
         password=mysqlPass,
     ) as connection:
         with connection.cursor() as cursor:
+
             print("Getting products for the products topic")
             cursor.execute("SELECT id, name, description, category, price, image FROM pizzashop.products")
+            
             products = [{
                 "id": str(row[0]),
                 "name": row[1],
@@ -52,62 +85,51 @@ try:
             ]
 
             for product in products:
-                print(product["id"])
                 producer.send('products', product, product["id"].encode("UTF-8"))
+            
             producer.flush()
 
             cursor.execute("SELECT id FROM pizzashop.users")
-            users = [row[0] for row in cursor]
+            users = [row[0] for row in cursor]  # we are only interested in user IDs
 
             print("Getting product ID and PRICE as tuples...")
             cursor.execute("SELECT id, price FROM pizzashop.products")
+            
             product_prices = [(row[0], row[1]) for row in cursor] # product along with price 
-            print(product_prices)
+            
+            # Historical data generation from 2022 to today
+            start_date = date(2022, 1, 1)
+            end_date = date.today()
 
-            while True:
-                # Get a random user and a product to order
-
-                number_of_items = random.randint(1,10)
-
-                items = []
-                for _ in range(0, number_of_items):
-                    product = random.choice(product_prices)
+            for single_date in daterange_weekdays(start_date, end_date):
+                for _ in range(random.randint(40, 101)):
                     user = random.choice(users)
-                    purchase_quantity = random.randint(1,5)
-                    items.append({
-                        "productId": str(product[0]),
-                        "quantity": purchase_quantity,
-                        "price": product[1]
-                    })
+                    items = generate_items(product_prices, random.randint(1, 10))
+                    event = create_event(user, items, "PAYMENT_CONFIRMED", random_time_on_day(single_date))
+                    producer.send('orders', event, bytes(event["id"].encode("UTF-8")))
+                    events_processed += 1
 
-                prices = [item["quantity"] * item["price"] for item in items]
-                total_price = round(math.fsum(prices), 2)
+                    if events_processed % 100 == 0:
+                        producer.flush()
+            
+            producer.flush()
+            
+            print("Added dummy records, and started live ingestion.")
 
-                event = {
-                    "id": str(uuid.uuid4()),
-                    "createdAt": datetime.datetime.now().isoformat(),
-                    "userId": user,
-                    "status": "PLACED_ORDER",
-                    "price": total_price,
-                    "items": items              
-                }
+            events_processed = 0
+            
+            # After this we will constantly simulate real orders comming up.
+            while True:
 
+                date(2022, 1, 1)
+
+                user = random.choice(users)
+                items = generate_items(product_prices, random.randint(1, 10))
+                event = create_event(user, items, "PLACED_ORDER", datetime.now().isoformat())
                 producer.send('orders', event, bytes(event["id"].encode("UTF-8")))
-
-                event2 = {
-                    "id": str(uuid.uuid4()),
-                    "createdAt": random_iso_date_2019_2024(),
-                    "userId": user,
-                    "status": "PLACED_ORDER",
-                    "price": total_price,
-                    "items": items   
-                }
-
-                producer.send('orders', event2, bytes(event2["id"].encode("UTF-8")))
-
                 events_processed += 1
+
                 if events_processed % 100 == 0:
-                    print(f"{str(datetime.datetime.now())} Flushing after {events_processed} events")
                     producer.flush()
 
                 time.sleep(random.randint(orderInterval/5, orderInterval)/1000)

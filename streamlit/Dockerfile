@@ -11,7 +11,7 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --upgrade pip
 
-COPY app.py .
+COPY app_enriched.py .
 
 # With this we override the file that was copied into the Docker image
-ENTRYPOINT ["streamlit", "run", "app.py"]  
+ENTRYPOINT ["streamlit", "run", "app_enriched.py"]  

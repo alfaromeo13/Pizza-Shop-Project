@@ -156,4 +156,4 @@ services:
       - MYSQL_SERVER=mysql
       - KAFKA_BROKER_HOSTNAME=kafka
       - KAFKA_BROKER_PORT=9092
-      
+      - PYTHONUNBUFFERED=1
