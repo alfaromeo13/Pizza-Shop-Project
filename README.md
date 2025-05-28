@@ -9,7 +9,13 @@ Only prerequisites is to have docker installed on your machine before starting t
 
 ## How to Run the Demo
 
-To start the demo, execute the following commands in your terminal:
+If you had just pulled this project you first need to build everything with 
+
+```bash
+docker-compose build
+```
+
+After that, to start the demo, execute the following commands in your terminal:
 
 ```bash
 docker-compose up -d

@@ -144,6 +144,7 @@ services:
     environment:
       - PINOT_SERVER
       - PINOT_PORT
+      - PYTHONUNBUFFERED=1 # allows debugging with docker log 
   
   orders-service:
     build: orders-service
@@ -156,4 +157,4 @@ services:
       - MYSQL_SERVER=mysql
       - KAFKA_BROKER_HOSTNAME=kafka
       - KAFKA_BROKER_PORT=9092
-      - PYTHONUNBUFFERED=1
+      - PYTHONUNBUFFERED=1 # allows debugging with docker log 
