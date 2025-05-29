@@ -7,14 +7,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-auto_refresh = True # We seta uto refresh of a page to True
-pinot_host = os.environ.get("PINOT_SERVER", "pinot-broker")
-pinot_port = os.environ.get("PINOT_PORT", 8099)
-conn = connect(pinot_host, pinot_port)
-st.set_page_config(layout="wide")
-st.title("Pizza Shop orders analytics 🍕")
-
-
 def plot_time_series(df_ts, time_col='dateMin', value_cols=['orders', 'revenue']):
     """
     Plots time series data for orders and revenue with padding and resampling.
@@ -48,18 +40,25 @@ def plot_time_series(df_ts, time_col='dateMin', value_cols=['orders', 'revenue']
     with col1:
         # Plot orders
         fig_orders = px.line(df_resampled, x=df_resampled.index, y='orders', title=f"Orders over time ({freq})")
-        fig_orders.update_traces(mode="lines+markers")
-        fig_orders.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+        fig_orders.update_traces(mode="lines+markers", line=dict(color='green'))
+        fig_orders.update_layout(margin=dict(l=0, r=0, t=40, b=0),xaxis=dict(type='date'))
         st.plotly_chart(fig_orders, use_container_width=True)
-
 
     with col2:
         # Plot revenue
         fig_revenue = px.line(df_resampled, x=df_resampled.index, y='revenue', title=f"Revenue over time ({freq})")
-        fig_revenue.update_traces(mode="lines+markers", line=dict(color='green'))
-        fig_revenue.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+        fig_revenue.update_traces(mode="lines+markers")
+        fig_revenue.update_layout(margin=dict(l=0, r=0, t=40, b=0),xaxis=dict(type='date'))
         st.plotly_chart(fig_revenue, use_container_width=True)
 
+
+
+auto_refresh = True # We seta uto refresh of a page to True
+pinot_host = os.environ.get("PINOT_SERVER", "pinot-broker")
+pinot_port = os.environ.get("PINOT_PORT", 8099)
+conn = connect(pinot_host, pinot_port)
+st.set_page_config(layout="wide")
+st.title("Pizza Shop orders analytics 🍕")
 
 mapping2 = {
     "1 hour": {"period": "PT60M", "previousPeriod": "PT120M", "granularity": "minute"},
@@ -136,8 +135,6 @@ try: #Testing Pinot connectivity
 except Exception as e:
     st.warning(f"Unable to connect to or query Apache Pinot [{pinot_host}:{pinot_port}] Exception: {e}", icon="⚠️")
 
-# CONFIGURATION UP TO THIS POINT. Now comes the logic of the app.
-
 # We (only) proceed when Pinot is available.
 if pinot_available:
     if time_ago != "Custom": # time range is not a custom selection
@@ -206,20 +203,36 @@ if pinot_available:
             from orders
             where ts > ago(%(timeAgo)s)
             group by dateMin
-            order by dateMin desc
+            order by dateMin asc
             LIMIT 10000
         """
 
         curs.execute(query_ts, {
-            "timeAgo": mapping2[time_ago]["previousPeriod"], 
+            "timeAgo": mapping2[time_ago]["period"], 
             "granularity": mapping2[time_ago]["granularity"]
         })
 
         # Load the time-series result into a DataFrame
         df_ts = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
+        # Convert time column to datetime and sort
+        df_ts['dateMin'] = pd.to_datetime(df_ts['dateMin'])
+        df_ts = df_ts.set_index('dateMin').sort_index()
+
+        # Choose frequency from current granularity setting
+        gran = mapping2[time_ago]['granularity']
+        freq = {'second': 'S', 'minute': 'T', 'hour': 'H'}.get(gran, 'T')
+
+        # Resample to fill missing time slots
+        df_ts = df_ts.resample(freq).sum().fillna(0).reset_index()
+
+        # Drop the final row if it's likely incomplete (causing cliff to 0)
+        if df_ts.shape[0] > 1:
+            avg_orders = df_ts['orders'][:-1].mean()
+            if df_ts.iloc[-1]['orders'] < 0.1 * avg_orders:
+                df_ts = df_ts.iloc[:-1]
 
     else:
-        # Custom time range query
+        # Similar story but for custom time range query
         start_str = start_datetime.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         end_str = end_datetime.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
@@ -254,7 +267,7 @@ if pinot_available:
             from orders
             where ts BETWEEN '{start_str}' AND '{end_str}'
             group by dateMin
-            order by dateMin desc
+            order by dateMin asc
             LIMIT 10000
         """
 
@@ -263,6 +276,7 @@ if pinot_available:
         df_ts = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
 
     # Plotting section
+    
     if df_ts.shape[0] > 1:
         plot_time_series(df_ts, time_col='dateMin', value_cols=['orders', 'revenue'])
 

@@ -110,7 +110,7 @@ try:
             # Generate historical data for full year of 2024
             start_time = time.time()
             start_date = date(2023, 1, 1)
-            end_date = date(2025, 8, 10)
+            end_date = datetime.now().date()
             days_total = (end_date - start_date).days + 1
 
             for single_day in daterange_weekdays(start_date, end_date):
