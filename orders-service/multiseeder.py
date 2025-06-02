@@ -126,7 +126,7 @@ try:
                     producer.send('orders', event, bytes(event["id"].encode("UTF-8")))
                     events_processed += 1
 
-                    if events_processed % 1000 == 0:
+                    if events_processed % 100    == 0:
                         print(f"Generated {events_processed:,} events so far...")
                         producer.flush()
 
@@ -139,16 +139,20 @@ try:
 
             while True:
                 user = random.choice(users)
-                items = generate_items(product_prices, random.randint(1, 10))
+                items = generate_items(product_prices, random.randint(1, 6))
+
                 event = create_event(user, items, "PLACED_ORDER", datetime.now().isoformat())
                 producer.send('orders', event, bytes(event["id"].encode("UTF-8")))
                 events_processed += 1
 
-                if events_processed % 100 == 0: 
+                # Every 10 orders, flush + print
+                if events_processed % 10 == 0: 
                     print(f"Processed {events_processed} live orders")
                     producer.flush()
 
-                time.sleep(random.randint(orderInterval//5, orderInterval)/1000)
+                # Wait exactly 30 seconds before sending the next order
+                time.sleep(30)
+
 
     connection.close()
 except Error as e:

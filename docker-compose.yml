@@ -7,6 +7,7 @@ services:
     ports:
       - "3306:3306"
     environment:
+      - TZ=Europe/Ljubljana
       - MYSQL_ROOT_PASSWORD=debezium
       - MYSQL_USER=mysqluser
       - MYSQL_PASSWORD=mysqlpw
@@ -79,6 +80,7 @@ services:
     restart: unless-stopped
     container_name: enrichment-kafka-streams
     environment:
+      - TZ=Europe/Ljubljana
       - QUARKUS_KAFKA_STREAMS_BOOTSTRAP_SERVERS=kafka:9092
       - ORDERS_TOPIC=orders
       - PRODUCTS_TOPIC=products 
@@ -142,6 +144,7 @@ services:
     volumes:
       - ./streamlit/app_enriched.py:/workdir/app.py
     environment:
+      - TZ=Europe/Ljubljana
       - PINOT_SERVER
       - PINOT_PORT
       - PYTHONUNBUFFERED=1 # allows debugging with docker log 
@@ -154,6 +157,7 @@ services:
       - mysql
       - kafka
     environment:
+      - TZ=Europe/Ljubljana
       - MYSQL_SERVER=mysql
       - KAFKA_BROKER_HOSTNAME=kafka
       - KAFKA_BROKER_PORT=9092
