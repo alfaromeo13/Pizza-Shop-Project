@@ -7,14 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-def plot_time_series(df_ts, time_col='dateMin', value_cols=['orders', 'revenue']):
-    """
-    Plots time series data for orders and revenue with padding and resampling.
-    :param df_ts: DataFrame with time series (must contain time_col + value_cols)
-    :param time_col: Name of timestamp column
-    :param value_cols: List of columns to plot (typically ['orders', 'revenue'])
-    """
-
+def plot_time_series(df_ts, time_col='dateMin'):
     # Convert to datetime
     df_ts[time_col] = pd.to_datetime(df_ts[time_col])
 
@@ -50,8 +43,6 @@ def plot_time_series(df_ts, time_col='dateMin', value_cols=['orders', 'revenue']
         fig_revenue.update_traces(mode="lines+markers")
         fig_revenue.update_layout(margin=dict(l=0, r=0, t=40, b=0),xaxis=dict(type='date'))
         st.plotly_chart(fig_revenue, use_container_width=True)
-
-
 
 auto_refresh = True # We seta uto refresh of a page to True
 pinot_host = os.environ.get("PINOT_SERVER", "pinot-broker")
@@ -154,7 +145,6 @@ if pinot_available:
             limit 1
         """
 
-        # execute query
         curs.execute(query, {
             "timeAgo": mapping2[time_ago]["previousPeriod"],
             "nearTimeAgo": mapping2[time_ago]["period"]
@@ -276,7 +266,6 @@ if pinot_available:
         df_ts = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
 
     # Plotting section
-    
     if df_ts.shape[0] > 1:
         plot_time_series(df_ts, time_col='dateMin', value_cols=['orders', 'revenue'])
 

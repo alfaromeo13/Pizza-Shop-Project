@@ -19,10 +19,26 @@ debeziumHostPort = 'debezium:8083'
 kafkaHostPort = f"{os.environ.get('KAFKA_BROKER_HOSTNAME', 'localhost')}:{os.environ.get('KAFKA_BROKER_PORT', '29092')}"
 
 def random_time_on_day(day: date) -> str:
-    """Generate a random ISO 8601 timestamp on a given day"""
-    random_milliseconds = random.randint(0, 86399999)  # 24 hours in milliseconds
-    full_datetime = datetime.combine(day, datetime.min.time()) + timedelta(milliseconds=random_milliseconds)
-    return full_datetime.isoformat()
+    """Generate a random ISO 8601 timestamp on a given day, up to now if today"""
+    if day == datetime.now().date():
+        # Limit to current time
+        now = datetime.now()
+        start_of_day = datetime.combine(now.date(), datetime.min.time())
+
+        # Get timedelta
+        elapsed = now - start_of_day
+
+        # Convert to milliseconds
+        milliseconds_since_start_of_day = int(elapsed.total_seconds() * 1000)
+
+        random_milliseconds = random.randint(0, milliseconds_since_start_of_day) 
+        full_datetime = datetime.combine(day, datetime.min.time()) + timedelta(milliseconds=random_milliseconds)
+        return full_datetime.isoformat()
+    else:
+        # Use full day range for past dates
+        random_milliseconds = random.randint(0, 86399999)  # full 24h in ms
+        full_datetime = datetime.combine(day, datetime.min.time()) + timedelta(milliseconds=random_milliseconds)
+        return full_datetime.isoformat()
 
 def daterange_weekdays(start_date, end_date):
     """Generate dates between start_date and end_date"""
@@ -140,7 +156,6 @@ try:
             while True:
                 user = random.choice(users)
                 items = generate_items(product_prices, random.randint(1, 6))
-
                 event = create_event(user, items, "PLACED_ORDER", datetime.now().isoformat())
                 producer.send('orders', event, bytes(event["id"].encode("UTF-8")))
                 events_processed += 1
