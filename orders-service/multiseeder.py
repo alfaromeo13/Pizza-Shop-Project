@@ -165,6 +165,7 @@ try:
                     print(f"Processed {events_processed} live orders")
                     producer.flush()
 
+                # TODO: napravi da svakih 3 sekunde napravi novi order 
                 # Wait exactly 30 seconds before sending the next order
                 time.sleep(30)
 

@@ -52,11 +52,11 @@ st.set_page_config(layout="wide")
 st.title("Pizza Shop orders analytics 🍕")
 
 mapping2 = {
-    "1 hour": {"period": "PT60M", "previousPeriod": "PT120M", "granularity": "minute"},
-    "30 minutes": {"period": "PT30M", "previousPeriod": "PT60M", "granularity": "minute"},
-    "10 minutes": {"period": "PT10M", "previousPeriod": "PT20M", "granularity": "second"},
-    "5 minutes": {"period": "PT5M", "previousPeriod": "PT10M", "granularity": "second"},
-    "1 minute": {"period": "PT1M", "previousPeriod": "PT2M", "granularity": "second"}
+    "1 hour": {"minutes": 60, "previous": 120, "granularity": "minute"},
+    "30 minutes": {"minutes": 30, "previous": 60, "granularity": "minute"},
+    "10 minutes": {"minutes": 10, "previous": 20, "granularity": "second"},
+    "5 minutes": {"minutes": 5, "previous": 10, "granularity": "second"},
+    "1 minute": {"minutes": 1, "previous": 2, "granularity": "second"}
 }
 
 time_options = list(mapping2.keys()) + ["Custom"] # time labels at the beginning of the dashboard
@@ -128,45 +128,44 @@ except Exception as e:
 
 # We (only) proceed when Pinot is available.
 if pinot_available:
-    if time_ago != "Custom": # time range is not a custom selection
+    if time_ago != "Custom":
+        now = datetime.now()
 
-        # Query to fetch count and sum of orders for the last period and previous period
-        # First row of query: Orders in the most recent period
-        # Second row Orders in the previous period
-        # Third row Revenue in the most recent period
-        # Forth row Revenue in the previous period
-        query = """
-            select count(*) FILTER(WHERE ts > ago(%(nearTimeAgo)s)) AS events1Min, 
-                   count(*) FILTER(WHERE ts <= ago(%(nearTimeAgo)s) AND ts > ago(%(timeAgo)s)) AS events1Min2Min,
-                   sum(price) FILTER(WHERE ts > ago(%(nearTimeAgo)s)) AS total1Min,
-                   sum(price) FILTER(WHERE ts <= ago(%(nearTimeAgo)s) AND ts > ago(%(timeAgo)s)) AS total1Min2Min
-            from orders
-            where ts > ago(%(timeAgo)s)
-            limit 1
+        minutes = mapping2[time_ago]["minutes"]
+        previous_minutes = mapping2[time_ago]["previous"]
+
+        start_dt = now - timedelta(minutes=minutes)
+        previous_start_dt = now - timedelta(minutes=previous_minutes)
+
+        # Format for Pinot
+        start_str = start_dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        previous_start_str = previous_start_dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        now_str = now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+        query = f"""
+            SELECT 
+                COUNT(*) FILTER(WHERE ts BETWEEN '{start_str}' AND '{now_str}') AS events1Min, 
+                COUNT(*) FILTER(WHERE ts BETWEEN '{previous_start_str}' AND '{start_str}') AS events1Min2Min,
+                SUM(price) FILTER(WHERE ts BETWEEN '{start_str}' AND '{now_str}') AS total1Min,
+                SUM(price) FILTER(WHERE ts BETWEEN '{previous_start_str}' AND '{start_str}') AS total1Min2Min
+            FROM orders
+            WHERE ts BETWEEN '{previous_start_str}' AND '{now_str}'
+            LIMIT 1
         """
 
-        curs.execute(query, {
-            "timeAgo": mapping2[time_ago]["previousPeriod"],
-            "nearTimeAgo": mapping2[time_ago]["period"]
-        })
-
-        # Load the query result into a pandas DataFrame
+        curs.execute(query)
         df = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
 
-        # Create a container with a border to display the metrics
         metrics_container = st.container(border=True)
         metrics_container.subheader(f"Orders in the last {time_ago}")
         num_orders, rev, order_val = metrics_container.columns(3)
 
-        # Display the number of recent orders and the delta compared to the previous period
         num_orders.metric(
             label="Number of orders",
-            value="{:,}".format(int(df['events1Min'].values[0])),
-            delta="{:,}".format(int(df['events1Min'].values[0] - df['events1Min2Min'].values[0]))
+            value="{:,}".format(int(df['events1Min'].values[0]))
             if df['events1Min2Min'].values[0] > 0 else None
         )
 
-        # Display total revenue and the delta compared to the previous period
         rev.metric(
             label="Revenue in €",
             value="{:,.2f}".format(df['total1Min'].values[0]),
@@ -174,7 +173,6 @@ if pinot_available:
             if df['total1Min2Min'].values[0] > 0 else None
         )
 
-        # Calculate the average order value for both periods
         average_order_value_1min = df['total1Min'].values[0] / int(df['events1Min'].values[0]) if df['events1Min'].values[0] > 0 else 0
         average_order_value_1min_2min = df['total1Min2Min'].values[0] / int(df['events1Min2Min'].values[0]) if int(df['events1Min2Min'].values[0]) > 0 else 0
 
@@ -185,37 +183,27 @@ if pinot_available:
             if average_order_value_1min_2min > 0 else None
         )
 
-        # Query to retrieve time-series data grouped by time intervals (minute, second, etc.)
-        query_ts = """
-            select ToDateTime(DATETRUNC(%(granularity)s, ts), 'yyyy-MM-dd HH:mm:ss') AS dateMin, 
-                   count(*) AS orders, 
-                   sum(price) AS revenue
-            from orders
-            where ts > ago(%(timeAgo)s)
-            group by dateMin
-            order by dateMin asc
+        granularity = mapping2[time_ago]["granularity"]
+        query_ts = f"""
+            SELECT ToDateTime(DATETRUNC('{granularity}', ts), 'yyyy-MM-dd HH:mm:ss') AS dateMin, 
+                COUNT(*) AS orders, 
+                SUM(price) AS revenue
+            FROM orders
+            WHERE ts BETWEEN '{start_str}' AND '{now_str}'
+            GROUP BY dateMin
+            ORDER BY dateMin ASC
             LIMIT 10000
         """
 
-        curs.execute(query_ts, {
-            "timeAgo": mapping2[time_ago]["period"], 
-            "granularity": mapping2[time_ago]["granularity"]
-        })
-
-        # Load the time-series result into a DataFrame
+        curs.execute(query_ts)
         df_ts = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
-        # Convert time column to datetime and sort
+
         df_ts['dateMin'] = pd.to_datetime(df_ts['dateMin'])
         df_ts = df_ts.set_index('dateMin').sort_index()
 
-        # Choose frequency from current granularity setting
-        gran = mapping2[time_ago]['granularity']
-        freq = {'second': 'S', 'minute': 'T', 'hour': 'H'}.get(gran, 'T')
-
-        # Resample to fill missing time slots
+        freq = {'second': 'S', 'minute': 'T', 'hour': 'H'}.get(granularity, 'T')
         df_ts = df_ts.resample(freq).sum().fillna(0).reset_index()
 
-        # Drop the final row if it's likely incomplete (causing cliff to 0)
         if df_ts.shape[0] > 1:
             avg_orders = df_ts['orders'][:-1].mean()
             if df_ts.iloc[-1]['orders'] < 0.1 * avg_orders:
@@ -265,11 +253,10 @@ if pinot_available:
 
         df_ts = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
 
-    # Plotting section
+    # Plotting timeseries
     if df_ts.shape[0] > 1:
-        plot_time_series(df_ts, time_col='dateMin', value_cols=['orders', 'revenue'])
+        plot_time_series(df_ts, time_col='dateMin')
 
-    
     # histograms
     if not df_ts.empty:
         # Extract the orders and revenue data
@@ -295,7 +282,6 @@ if pinot_available:
             template="plotly_white"
         )
 
-        # Create histogram for revenue
         fig_revenue_hist = go.Figure()
         fig_revenue_hist.add_trace(go.Histogram(
             x=revenue_data,
@@ -314,7 +300,6 @@ if pinot_available:
             template="plotly_white"
         )
 
-        # Display in Streamlit side by side
         col_hist_orders, col_hist_revenue = st.columns(2)
         with col_hist_orders:
             st.plotly_chart(fig_orders_hist, use_container_width=True)
@@ -334,47 +319,46 @@ if pinot_available:
 
         df = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
         # Potential todo: convert time to datetime for better formatting in data_editor
-        with st.container(border=True):
-            st.subheader("Latest orders")
-            st.data_editor(
-                df,
-                column_config={
-                    "dateTime": "Time",
-                    "status": "Status",
-                    "price": st.column_config.NumberColumn("Price", format="%.2f€"),
-                    "userId": st.column_config.NumberColumn("User ID", format="%d"),
-                    "productsOrdered": st.column_config.NumberColumn("Quantity", help="Quantity of distinct products ordered", format="%d"),
-                    "totalQuantity": st.column_config.NumberColumn("Total quantity", help="Total quantity ordered", format="%d"),
-                },
-                disabled=True
-            )
+        st.subheader("Latest orders")
+        st.data_editor(
+            df,
+            column_config={
+                "dateTime": "Time",
+                "status": "Status",
+                "price": st.column_config.NumberColumn("Price", format="%.2f€"),
+                "userId": st.column_config.NumberColumn("User ID", format="%d"),
+                "productsOrdered": st.column_config.NumberColumn("Quantity", help="Quantity of distinct products ordered", format="%d"),
+                "totalQuantity": st.column_config.NumberColumn("Total quantity", help="Total quantity ordered", format="%d"),
+            },
+            disabled=True
+        )
 
     with right:
         if not df_ts.empty:
+            st.subheader("Top 10 Users by Revenue")
+
             if time_ago == "Custom":
-                st.subheader(f"Top 10 Users by Revenue ({start_datetime.strftime('%Y-%m-%d')} to {end_datetime.strftime('%Y-%m-%d')})")
-                top_users_query = f"""
-                    SELECT userId,
-                        COUNT(*) AS orders, 
-                        SUM(price) AS revenue
-                    FROM orders
-                    WHERE ts BETWEEN '{start_str}' AND '{end_str}'
-                    GROUP BY userId
-                    ORDER BY revenue DESC
-                    LIMIT 10
-                """
+                top_users_start = start_datetime
+                top_users_end = end_datetime + timedelta(seconds=1)
             else:
-                st.subheader("Top 10 Users by Revenue")
-                top_users_query = f"""
-                    SELECT userId,
-                        COUNT(*) AS orders, 
-                        SUM(price) AS revenue
-                    FROM orders
-                    WHERE ts > ago('{mapping2[time_ago]['period']}')
-                    GROUP BY userId
-                    ORDER BY revenue DESC
-                    LIMIT 10
-                """
+                now = datetime.now()
+                minutes = mapping2[time_ago]["minutes"]
+                top_users_start = now - timedelta(minutes=minutes)
+                top_users_end = now
+
+            start_str_top_users = top_users_start.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            end_str_top_users = top_users_end.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+            top_users_query = f"""
+                SELECT userId,
+                    COUNT(*) AS orders, 
+                    SUM(price) AS revenue
+                FROM orders
+                WHERE ts BETWEEN '{start_str_top_users}' AND '{end_str_top_users}'
+                GROUP BY userId
+                ORDER BY revenue DESC
+                LIMIT 10
+            """
 
             curs.execute(top_users_query)
             df_top_users = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
@@ -395,7 +379,7 @@ if pinot_available:
                     opacity=0.65
                 ))
                 fig_top_users.update_layout(
-                        xaxis=dict(
+                    xaxis=dict(
                         title="Revenue (€)",
                         showgrid=True,
                         gridcolor='lightgray',
@@ -410,34 +394,41 @@ if pinot_available:
                     template="plotly_white"
                 )
 
-                with right:
-                    st.plotly_chart(fig_top_users, use_container_width=True)
+                st.plotly_chart(fig_top_users, use_container_width=True)
 
     lefff, riggg = st.columns(2)
 
     if time_ago == "Custom":
-        where_clause = f"ts BETWEEN '{start_str}' AND '{end_str}'"
+        range_start = start_datetime
+        range_end = end_datetime + timedelta(seconds=1)
     else:
-        where_clause = f"ts > ago('{mapping2[time_ago]['period']}')"
+        now = datetime.now()
+        minutes = mapping2[time_ago]["minutes"]
+        range_start = now - timedelta(minutes=minutes)
+        range_end = now
+
+    start_str_range = range_start.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    end_str_range = range_end.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    where_clause = f"ts BETWEEN '{start_str_range}' AND '{end_str_range}'"
 
     with lefff:
-        with st.container(border=True):
-            st.subheader("Most popular categories")
+        st.subheader("Most popular categories")
 
-            query_categories = f"""
-                SELECT "product.category" AS category, 
-                    distinctcount(orderId) AS orders,
-                    sum("orderItem.quantity") AS quantity
-                FROM order_items_enriched
-                WHERE {where_clause}
-                GROUP BY category
-                ORDER BY count(*) DESC
-                LIMIT 5
-            """
+        query_categories = f"""
+            SELECT "product.category" AS category, 
+                distinctcount(orderId) AS orders,
+                sum("orderItem.quantity") AS quantity
+            FROM order_items_enriched
+            WHERE {where_clause}
+            GROUP BY category
+            ORDER BY count(*) DESC
+            LIMIT 5
+        """
 
-            curs.execute(query_categories)
+        curs.execute(query_categories)
+        df = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
 
-            df = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
+        if not df.empty:
             df["quantityPerOrder"] = df["quantity"] / df["orders"]
 
             st.data_editor(
@@ -450,8 +441,11 @@ if pinot_available:
                 },
                 disabled=True
             )
- 
+        else:
+            st.info("No data available for selected period.")
+
     with riggg:
+        st.subheader("Most popular items")
 
         query_products = f"""
             SELECT "product.name" AS product, 
@@ -466,12 +460,11 @@ if pinot_available:
         """
 
         curs.execute(query_products)
-
         df = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
-        df["quantityPerOrder"] = df["quantity"] / df["orders"]
 
-        with st.container(border=True):
-            st.subheader("Most popular items")
+        if not df.empty:
+            df["quantityPerOrder"] = df["quantity"] / df["orders"]
+
             st.data_editor(
                 df,
                 use_container_width=True,
@@ -484,301 +477,280 @@ if pinot_available:
                 },
                 disabled=True
             )
+        else:
+            st.info("No data available for selected period.")
 
-    A, B = st.columns(2)
+    A, B = st.columns(2) 
 
     with A:
-        with st.container(border=True):
-            st.subheader("Busiest Hours Heatmap")
-            
-            # Initialize session state for heatmap if not exists
-            if 'heatmap_date_range' not in st.session_state:
-                st.session_state.heatmap_date_range = "LAST_7_DAYS"  # Set 7 days as default
-            
-            # Create centered buttons with 5 columns (empty columns on sides for centering)
-            col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
-            
-            with col2:
-                if st.button("Last 7 Days", key="heatmap_7days"):
-                    st.session_state.heatmap_date_range = "LAST_7_DAYS"
-            with col3:
-                if st.button("Last 30 Days", key="heatmap_30days"):
-                    st.session_state.heatmap_date_range = "LAST_30_DAYS"
-            with col4:
-                if st.button("All Time", key="heatmap_alltime"):
-                    st.session_state.heatmap_date_range = "ALL_TIME"
+        st.subheader("Order Activity Heatmap")
 
-            # Determine date range based on session state
-            if st.session_state.heatmap_date_range == "LAST_7_DAYS":
-                start_date_heatmap = datetime.now() - timedelta(days=7)
-                end_date_heatmap = datetime.now()
-                where_clause_heatmap = f"ts BETWEEN '{start_date_heatmap.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}' AND '{end_date_heatmap.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}'"
-                
-                if (end_date_heatmap - start_date_heatmap).days < 7:
-                    st.warning("Note: Selected date range is less than 7 days; some days may have no data.", icon="⚠️")
-            
-            elif st.session_state.heatmap_date_range == "LAST_30_DAYS":
-                start_date_heatmap = datetime.now() - timedelta(days=30)
-                end_date_heatmap = datetime.now()
-                where_clause_heatmap = f"ts BETWEEN '{start_date_heatmap.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}' AND '{end_date_heatmap.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}'"
-            
-            elif st.session_state.heatmap_date_range == "ALL_TIME":
-                start_date_heatmap = datetime(1970, 1, 1)
-                end_date_heatmap = datetime.now()
-                where_clause_heatmap = f"ts BETWEEN '{start_date_heatmap.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}' AND '{end_date_heatmap.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}'"
-            
-            else:  # GLOBAL_PICKER (fallback)
-                if time_ago == "Custom":
-                    where_clause_heatmap = f"ts BETWEEN '{start_str}' AND '{end_str}'"
-                    if (end_datetime - start_datetime).days < 7:
-                        st.warning("Note: Selected date range is less than 7 days; some days may have no data.", icon="⚠️")
-                else:
-                    where_clause_heatmap = f"ts > ago('{mapping2[time_ago]['period']}')"
-                    # Clear any previous heatmap if switching to non-custom
-                    st.session_state.heatmap_date_range = "LAST_7_DAYS"  # Reset to default
-            
-            # Only show heatmap if we're in a valid state
-            if not (time_ago != "Custom" and st.session_state.heatmap_date_range == "GLOBAL_PICKER"):
-                # Query for heatmap data
-                heatmap_query = f"""
-                    SELECT 
-                        DAYOFWEEK(ts) AS weekday_num, 
-                        HOUR(ts) AS hour, 
-                        COUNT(*) AS order_volume,
-                        SUM(price) AS total_sales
-                    FROM orders
-                    WHERE {where_clause_heatmap}
-                    GROUP BY weekday_num, hour
-                    ORDER BY weekday_num, hour
-                """
+        filter_option = st.radio(
+            "Select heatmap data range",
+            options=["Last 7 days", "Last 30 days", "All time"],
+            index=0,  # Default to "Last 7 days"
+            horizontal=True
+        )
 
-                curs.execute(heatmap_query)
-                df_heat = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
+        if time_ago == "Custom":
+            heatmap_start = start_datetime
+            heatmap_end = end_datetime + timedelta(seconds=1)
+        else:
+            now = datetime.now()
+            if filter_option == "Last 7 days":
+                heatmap_start = now - timedelta(days=7)
+            elif filter_option == "Last 30 days":
+                heatmap_start = now - timedelta(days=30)
+            else:
+                heatmap_start = datetime(2023, 1, 1)
+            heatmap_end = now
 
-                if not df_heat.empty:
-                    # Proper day mapping - adjust if your database uses different numbering
-                    day_mapping = {
-                        1: "Sunday",
-                        2: "Monday", 
-                        3: "Tuesday",
-                        4: "Wednesday",
-                        5: "Thursday",
-                        6: "Friday",
-                        7: "Saturday"
-                    }
-                    
-                    # Apply the day mapping
-                    df_heat["weekday"] = df_heat["weekday_num"].map(day_mapping)
-                    
-                    # Ensure all hours (0-23) and all days are represented
-                    all_hours = list(range(24))
-                    all_days = list(day_mapping.values())  # Use consistent order from mapping
-                    
-                    # Create complete grid with zeros for missing combinations
-                    heatmap_data = []
-                    for day in all_days:
-                        day_data = []
-                        for hour in all_hours:
-                            match = df_heat[(df_heat["weekday"] == day) & (df_heat["hour"] == hour)]
-                            if not match.empty:
-                                # Use the first value if multiple (shouldn't happen due to GROUP BY)
-                                day_data.append(float(match["total_sales"].iloc[0]))
-                            else:
-                                day_data.append(0)  # Explicit zero for missing combinations
-                        heatmap_data.append(day_data)
-                    
-                    # Create heatmap figure
-                    fig_heatmap = go.Figure(data=go.Heatmap(
-                        z=heatmap_data,
-                        x=all_hours,
-                        y=all_days,
-                        colorscale='Blues',
-                        hoverongaps=False,
-                        hovertemplate='Day: %{y}<br>Hour: %{x}<br>Sales: €%{z}<extra></extra>',
-                        colorbar=dict(title='Sales (€)')
-                    ))
-                    
-                    # Ensure proper day ordering in visualization
-                    fig_heatmap.update_layout(
-                        title=f"Sales by Hour and Day of Week ({st.session_state.heatmap_date_range.replace('_', ' ')})",
-                        xaxis=dict(
-                            title="Hour of Day",
-                            tickmode='array',
-                            tickvals=list(range(24)),
-                            ticktext=[f"{h}:00" for h in range(24)]
-                        ),
-                        yaxis=dict(
-                            title="Day of Week",
-                            categoryorder='array',
-                            categoryarray=all_days  # Use the same order as our mapping
-                        ),
-                        margin=dict(l=100, r=50, t=80, b=50)
-                    )
-                    
-                    st.plotly_chart(fig_heatmap, use_container_width=True)
-                else:
-                    st.warning('No order activity to show for this period.', icon="⚠️")
+        # Format times for SQL
+        heatmap_start_str = heatmap_start.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        heatmap_end_str = heatmap_end.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+        # Warn if less than 7 full days selected
+        if (heatmap_end - heatmap_start).days < 7:
+            st.warning("The selected period is less than 7 days. Some days may be missing from the heatmap.")
+
+        query_heatmap = f"""
+            SELECT 
+                dayOfWeek(ts) AS day, 
+                hour(ts) AS hour,
+                COUNT(*) AS orders
+            FROM orders
+            WHERE ts BETWEEN '{heatmap_start_str}' AND '{heatmap_end_str}'
+            GROUP BY day, hour
+            LIMIT 10000
+        """
+
+        curs.execute(query_heatmap)
+        df_heatmap = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
+
+        if not df_heatmap.empty:
+            day_map = {
+                1: "Sunday",
+                2: "Monday",
+                3: "Tuesday",
+                4: "Wednesday",
+                5: "Thursday",
+                6: "Friday",
+                7: "Saturday"
+            }
+            df_heatmap['day'] = df_heatmap['day'].map(day_map)
+
+            # Pivot to matrix format
+            heatmap_matrix = df_heatmap.pivot(index='day', columns='hour', values='orders').fillna(0)
+
+            # Ensure full hour range (0–23) is present
+            all_hours = list(range(24))
+            heatmap_matrix = heatmap_matrix.reindex(columns=all_hours, fill_value=0)
+
+            # Reorder rows Monday to Sunday
+            weekdays_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+            heatmap_matrix = heatmap_matrix.reindex(weekdays_order)
+
+            # Create matching tooltip text matrix
+            hover_text = []
+            for day in heatmap_matrix.index:
+                row = []
+                for hour in heatmap_matrix.columns:
+                    count = int(heatmap_matrix.loc[day, hour])
+                    row.append(f"{day}, {hour:02}h: {count} orders")
+                hover_text.append(row)
+
+            hour_labels = [f"{h:02}" for h in heatmap_matrix.columns]
+
+            fig_heatmap = go.Figure(data=go.Heatmap(
+                z=heatmap_matrix.values,
+                x=hour_labels,
+                y=heatmap_matrix.index,
+                text=hover_text,
+                hoverinfo="text",
+                colorscale='Blues'
+            ))
+
+            fig_heatmap.update_layout(
+                title="Order Volume Heatmap (Day of Week × Hour)",
+                xaxis=dict(
+                    title="Hour of Day",
+                    tickmode='array',
+                    tickvals=list(range(24)),
+                    ticktext=[f"{h:02}h" for h in range(24)],
+                    tickangle=45
+                ),
+                yaxis_title="Day of Week",
+                margin=dict(l=40, r=20, t=40, b=40)
+            )
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+        else:
+            st.info("No data available to render heatmap for the selected period.")
 
     with B:
-        with st.container(border=True):
-            st.subheader("Revenue Contribution by Product Category")
+        st.subheader("Revenue Contribution by Product Category")
+        st.caption("Displays the total revenue generated by each product category for the selected time period.")
+        
+        query_treemap = f"""
+            SELECT product.category AS category, SUM(product.price) AS revenue
+            FROM order_items_enriched
+            WHERE {where_clause}
+            GROUP BY product.category
+        """
+        
+        curs.execute(query_treemap)
+        df_treemap = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
 
-            query_treemap = f"""
-                SELECT product.category AS category, SUM(product.price) AS revenue
-                FROM order_items_enriched
-                WHERE {where_clause}
-                GROUP BY product.category
-            """
+        if not df_treemap.empty:
 
-            curs.execute(query_treemap)
-            df_treemap = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
+            df_treemap = df_treemap.sort_values(by="revenue", ascending=False)
 
-            if not df_treemap.empty:
-                fig_treemap = px.treemap(
+            fig_treemap = px.treemap(
                 df_treemap,
                 path=[px.Constant("all"), 'category'],  # Add a root node explicitly
                 values='revenue',
                 color='revenue',
                 color_continuous_scale='RdBu'
-                )
+            )
 
-                fig_treemap.update_traces(root_color="white") 
+            fig_treemap.update_traces(
+                hovertemplate='<b>%{label}</b><br>Revenue: €%{value:,.2f}<extra></extra>',
+                root_color="white"
+            ) 
 
-                fig_treemap.update_layout(
-                    paper_bgcolor='white',
-                    margin=dict(t=50, l=25, r=25, b=25)
-                )
+            fig_treemap.update_layout(
+                paper_bgcolor='white',
+                margin=dict(t=50, l=25, r=25, b=25)
+            )
 
-                st.plotly_chart(fig_treemap, use_container_width=True)
-            else:
-                st.info("No revenue data available for selected time range.")
-
-    with st.container(border=True):
-        st.subheader("Sales Over Time")
-        
-        # Check if we should show the chart
-        show_chart = True
-        if time_ago != "Custom":
-            show_chart = False
-            st.info("Please select 'Custom' date range and choose at least 1 month period to view this chart", icon="ℹ️")
+            st.plotly_chart(fig_treemap, use_container_width=True)
         else:
-            # For custom range, check if at least 1 month is selected
-            date_diff = (end_datetime - start_datetime).days
-            if date_diff < 30:  # Approx 1 month
-                show_chart = False
-                st.warning('Please select a time period of at least 1 month to view sales trends.', icon="⚠️")
-        
-        if show_chart:
-            # Use session state to persist granularity selection
-            if 'sales_granularity' not in st.session_state:
-                st.session_state.sales_granularity = "MONTHLY"
-            
-            # Centered buttons using columns
-            cols = st.columns((2, 1, 1, 2))  # Wider spacing for better centering
-            with cols[1]:
-                if st.button("Monthly View", key="monthly_view_btn"):
-                    st.session_state.sales_granularity = "MONTHLY"
-            with cols[2]:
-                if st.button("Yearly View", key="yearly_view_btn"):
-                    st.session_state.sales_granularity = "YEARLY"
-            
-            # Query based on granularity
-            if st.session_state.sales_granularity == "MONTHLY":
-                sales_query = f"""
-                    SELECT 
-                        ToDateTime(DATETRUNC('MONTH', ts), 'yyyy-MM-dd HH:mm:ss') AS time_period,
-                        SUM(price) AS total_sales
-                    FROM orders
-                    WHERE ts BETWEEN '{start_str}' AND '{end_str}'
-                    GROUP BY DATETRUNC('MONTH', ts)
-                    ORDER BY time_period
-                """
-                xaxis_title = "Month"
-            else:  # YEARLY
-                sales_query = f"""
-                    SELECT 
-                        ToDateTime(DATETRUNC('YEAR', ts), 'yyyy-MM-dd HH:mm:ss') AS time_period,
-                        SUM(price) AS total_sales
-                    FROM orders
-                    WHERE ts BETWEEN '{start_str}' AND '{end_str}'
-                    GROUP BY DATETRUNC('YEAR', ts)
-                    ORDER BY time_period
-                """
-                xaxis_title = "Year"
+            st.info("No revenue data available for selected time range.")
 
-            curs.execute(sales_query)
-            df_sales = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
+    st.subheader("Sales Over Time")
+    
+    # Check if we should show the chart
+    show_chart = True
+    if time_ago != "Custom":
+        show_chart = False
+        st.info("Please select 'Custom' date range and choose at least 1 month period to view this chart", icon="ℹ️")
+    else:
+        # For custom range, check if at least 1 month is selected
+        date_diff = (end_datetime - start_datetime).days
+        if date_diff < 30:  # Approx 1 month
+            show_chart = False
+            st.warning('Please select a time period of at least 1 month to view sales trends.', icon="⚠️")
+    
+    if show_chart:
+        # Use session state to persist granularity selection
+        if 'sales_granularity' not in st.session_state:
+            st.session_state.sales_granularity = "MONTHLY"
+        
+        # Centered buttons using columns
+        cols = st.columns((2, 1, 1, 2))  # Wider spacing for better centering
+        with cols[1]:
+            if st.button("Monthly View", key="monthly_view_btn"):
+                st.session_state.sales_granularity = "MONTHLY"
+        with cols[2]:
+            if st.button("Yearly View", key="yearly_view_btn"):
+                st.session_state.sales_granularity = "YEARLY"
+        
+        # Query based on granularity
+        if st.session_state.sales_granularity == "MONTHLY":
+            sales_query = f"""
+                SELECT 
+                    ToDateTime(DATETRUNC('MONTH', ts), 'yyyy-MM-dd HH:mm:ss') AS time_period,
+                    SUM(price) AS total_sales
+                FROM orders
+                WHERE ts BETWEEN '{start_str}' AND '{end_str}'
+                GROUP BY DATETRUNC('MONTH', ts)
+                ORDER BY time_period limit 100
+            """
+            xaxis_title = "Month"
+        else:  # YEARLY
+            sales_query = f"""
+                SELECT 
+                    ToDateTime(DATETRUNC('YEAR', ts), 'yyyy-MM-dd HH:mm:ss') AS time_period,
+                    SUM(price) AS total_sales
+                FROM orders
+                WHERE ts BETWEEN '{start_str}' AND '{end_str}'
+                GROUP BY DATETRUNC('YEAR', ts)
+                ORDER BY time_period
+            """
+            xaxis_title = "Year"
+
+        curs.execute(sales_query)
+        df_sales = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
+        
+        if not df_sales.empty:
+            # Convert time_period to datetime
+            df_sales['time_period'] = pd.to_datetime(df_sales['time_period'])
             
-            if not df_sales.empty:
-                # Convert time_period to datetime
-                df_sales['time_period'] = pd.to_datetime(df_sales['time_period'])
-                
-                # Create complete date range
-                min_date = df_sales['time_period'].min()
-                max_date = df_sales['time_period'].max()
-                
-                if st.session_state.sales_granularity == "MONTHLY":
-                    all_periods = pd.date_range(start=min_date, end=max_date, freq='MS')
-                    df_all = pd.DataFrame({'time_period': all_periods})
-                    df_sales = df_all.merge(df_sales, on='time_period', how='left').fillna(0)
-                    df_sales['time_period_display'] = df_sales['time_period'].dt.strftime('%b %Y')
-                else:
-                    all_periods = pd.date_range(start=min_date, end=max_date, freq='YS')
-                    df_all = pd.DataFrame({'time_period': all_periods})
-                    df_sales = df_all.merge(df_sales, on='time_period', how='left').fillna(0)
-                    df_sales['time_period_display'] = df_sales['time_period'].dt.strftime('%Y')
-                
-                # Create line chart with shaded area
-                fig_sales = go.Figure()
-                
-                # Add shaded area under the curve
-                fig_sales.add_trace(go.Scatter(
-                    x=df_sales['time_period_display'],
-                    y=df_sales['total_sales'],
-                    fill='tozeroy',
-                    fillcolor='rgba(65, 105, 225, 0.2)',
-                    line=dict(color='rgba(0,0,0,0)'),
-                    hoverinfo='skip',
-                    showlegend=False
-                ))
-                
-                # Add main line
-                fig_sales.add_trace(go.Scatter(
-                    x=df_sales['time_period_display'],
-                    y=df_sales['total_sales'],
-                    mode='lines+markers',
-                    line=dict(color='royalblue', width=2),
-                    marker=dict(size=8, color='royalblue'),
-                    name='Total Sales',
-                    hovertemplate='%{x}<br>Sales: €%{y:,.2f}<extra></extra>'
-                ))
-                
-                fig_sales.update_layout(
-                    title=f"Sales Over Time ({start_datetime.strftime('%Y-%m-%d')} to {end_datetime.strftime('%Y-%m-%d')})",
-                    xaxis=dict(
-                        title=xaxis_title,
-                        type='category',
-                        tickmode='array',
-                        tickvals=df_sales['time_period_display'],
-                        tickangle=-45   ,
-                        tickfont=dict(size=10),  # Adjust font size if needed
-                        nticks=len(df_sales),    # Force showing all ticks
-                        autorange=True,           # Ensure full range is visible
-                        fixedrange=False
-                    ),
-                    yaxis=dict(
-                        title='Sales (€)',
-                        tickprefix='€'
-                    ),
-                    hovermode='x unified',
-                    margin=dict(l=50, r=50, t=80, b=100),
-                    showlegend=False,
-                    plot_bgcolor='rgba(0,0,0,0)'
-                )
-                
-                st.plotly_chart(fig_sales, use_container_width=True)
+            # Create complete date range
+            min_date = df_sales['time_period'].min()
+            max_date = df_sales['time_period'].max()
+            
+            if st.session_state.sales_granularity == "MONTHLY":
+                all_periods = pd.date_range(start=min_date, end=max_date, freq='MS')
+                df_all = pd.DataFrame({'time_period': all_periods})
+                df_sales = df_all.merge(df_sales, on='time_period', how='left').fillna(0)
+                df_sales['time_period_display'] = df_sales['time_period'].dt.strftime('%b %Y')
             else:
-                st.warning('No sales data available for the selected time range.', icon="⚠️")
+                all_periods = pd.date_range(start=min_date, end=max_date, freq='YS')
+                df_all = pd.DataFrame({'time_period': all_periods})
+                df_sales = df_all.merge(df_sales, on='time_period', how='left').fillna(0)
+                df_sales['time_period_display'] = df_sales['time_period'].dt.strftime('%Y')
+            
+            # Create line chart with shaded area
+            fig_sales = go.Figure()
+            
+            # Add shaded area under the curve
+            fig_sales.add_trace(go.Scatter(
+                x=df_sales['time_period_display'],
+                y=df_sales['total_sales'],
+                fill='tozeroy',
+                fillcolor='rgba(65, 105, 225, 0.2)',
+                line=dict(color='rgba(0,0,0,0)'),
+                hoverinfo='skip',
+                showlegend=False
+            ))
+            
+            # Add main line
+            fig_sales.add_trace(go.Scatter(
+                x=df_sales['time_period_display'],
+                y=df_sales['total_sales'],
+                mode='lines+markers',
+                line=dict(color='royalblue', width=2),
+                marker=dict(size=8, color='royalblue'),
+                name='Total Sales',
+                hovertemplate='%{x}<br>Sales: €%{y:,.2f}<extra></extra>'
+            ))
+            
+            fig_sales.update_layout(
+                title=f"Sales Over Time ({start_datetime.strftime('%Y-%m-%d')} to {end_datetime.strftime('%Y-%m-%d')})",
+                xaxis=dict(
+                    title=xaxis_title,
+                    type='category',
+                    tickmode='array',
+                    tickvals=df_sales['time_period_display'],
+                    tickangle=-45   ,
+                    tickfont=dict(size=10),  # Adjust font size if needed
+                    nticks=len(df_sales),    # Force showing all ticks
+                    autorange=True,           # Ensure full range is visible
+                    fixedrange=False
+                ),
+                yaxis=dict(
+                    title='Sales (€)',
+                    tickprefix='€'
+                ),
+                hovermode='x unified',
+                margin=dict(l=50, r=50, t=80, b=100),
+                showlegend=False,
+                plot_bgcolor='rgba(0,0,0,0)'
+            )
+            
+            st.plotly_chart(fig_sales, use_container_width=True)
+        else:
+            st.warning('No sales data available for the selected time range.', icon="⚠️")
 
     curs.close()
 
