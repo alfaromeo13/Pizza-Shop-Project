@@ -10,7 +10,7 @@ from datetime import date, timedelta, datetime
 
 # Configuration
 usersLimit = 1000
-orderInterval = 100
+orderInterval = 3000
 mysqlHost = os.environ.get("MYSQL_SERVER", "localhost")
 mysqlPort = '3306'
 mysqlUser = 'mysqluser'
@@ -160,14 +160,10 @@ try:
                 producer.send('orders', event, bytes(event["id"].encode("UTF-8")))
                 events_processed += 1
 
-                # Every 10 orders, flush + print
                 if events_processed % 10 == 0: 
-                    print(f"Processed {events_processed} live orders")
                     producer.flush()
 
-                # TODO: napravi da svakih 3 sekunde napravi novi order 
-                # Wait exactly 30 seconds before sending the next order
-                time.sleep(30)
+                time.sleep(random.randint(orderInterval/5, orderInterval)/1000)
 
 
     connection.close()

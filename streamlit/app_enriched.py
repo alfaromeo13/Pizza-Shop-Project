@@ -7,42 +7,72 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
-def plot_time_series(df_ts, time_col='dateMin'):
+def plot_time_series(df_ts, time_col='dateMin', time_mode="Custom"):
     # Convert to datetime
     df_ts[time_col] = pd.to_datetime(df_ts[time_col])
-
-    # Set index
     df_ts = df_ts.set_index(time_col).sort_index()
 
     # Infer best granularity
     total_seconds = (df_ts.index.max() - df_ts.index.min()).total_seconds()
-
     if total_seconds < 60 * 10:
-        freq = 'S'  # second
+        freq = 'S'
     elif total_seconds < 60 * 60:
-        freq = 'T'  # minute
+        freq = 'T'
     else:
-        freq = 'H'  # hour
+        freq = 'H'
 
-    # Resample to regular time intervals and fill gaps with 0
+    # Resample and fill missing
     df_resampled = df_ts.resample(freq).sum().fillna(0)
 
-    # Create Streamlit layout
+    # Determine if we're in live mode (non-Custom)
+    is_live = time_mode != "Custom"
+
     col1, col2 = st.columns(2)
 
-    with col1:
-        # Plot orders
-        fig_orders = px.line(df_resampled, x=df_resampled.index, y='orders', title=f"Orders over time ({freq})")
-        fig_orders.update_traces(mode="lines+markers", line=dict(color='green'))
-        fig_orders.update_layout(margin=dict(l=0, r=0, t=40, b=0),xaxis=dict(type='date'))
-        st.plotly_chart(fig_orders, use_container_width=True)
+    for metric, col, color in [('orders', col1, 'green'), ('revenue', col2, 'blue')]:
+        with col:
+            st.markdown(f"### <div style='text-align: center;'>{metric.capitalize()} Over Time</div>", unsafe_allow_html=True)
 
-    with col2:
-        # Plot revenue
-        fig_revenue = px.line(df_resampled, x=df_resampled.index, y='revenue', title=f"Revenue over time ({freq})")
-        fig_revenue.update_traces(mode="lines+markers")
-        fig_revenue.update_layout(margin=dict(l=0, r=0, t=40, b=0),xaxis=dict(type='date'))
-        st.plotly_chart(fig_revenue, use_container_width=True)
+            fig = go.Figure()
+
+            if is_live and df_resampled.shape[0] > 1:
+                # Split complete vs in-progress
+                latest = df_resampled.index.max()
+                second_latest = df_resampled.index.sort_values()[-2]
+
+                complete = df_resampled[df_resampled.index < latest]
+                incomplete = df_resampled[df_resampled.index >= second_latest]
+
+                fig.add_trace(go.Scatter(
+                    x=complete.index,
+                    y=complete[metric],
+                    mode='lines',
+                    line=dict(color=color, dash='solid'),
+                    name=f"{metric.capitalize()} (complete)"
+                ))
+                fig.add_trace(go.Scatter(
+                    x=incomplete.index,
+                    y=incomplete[metric],
+                    mode='lines',
+                    line=dict(color=color, dash='dash'),
+                    name=f"{metric.capitalize()} (in-progress)"
+                ))
+            else:
+                # Just plot everything normally
+                fig.add_trace(go.Scatter(
+                    x=df_resampled.index,
+                    y=df_resampled[metric],
+                    mode='lines',
+                    line=dict(color=color),
+                    name=metric.capitalize()
+                ))
+
+            fig.update_layout(
+                xaxis=dict(type='date'),
+                margin=dict(l=0, r=0, t=40, b=0),
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
 auto_refresh = True # We seta uto refresh of a page to True
 pinot_host = os.environ.get("PINOT_SERVER", "pinot-broker")
@@ -255,87 +285,149 @@ if pinot_available:
 
     # Plotting timeseries
     if df_ts.shape[0] > 1:
-        plot_time_series(df_ts, time_col='dateMin')
+        plot_time_series(df_ts, time_col='dateMin', time_mode=time_ago)
 
-    # histograms
+    query_raw_orders = f"""
+        SELECT ToDateTime(ts, 'yyyy-MM-dd HH:mm:ss') AS ts, userId, price
+        FROM orders
+        WHERE ts BETWEEN '{start_str}' AND '{now_str if time_ago != 'Custom' else end_str}'
+        LIMIT 100000
+    """
+    curs.execute(query_raw_orders)
+
+    df_orders = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
+    df_orders['ts'] = pd.to_datetime(df_orders['ts'])
+
+    st.markdown("<br><br>", unsafe_allow_html=True) 
+
     if not df_ts.empty:
         # Extract the orders and revenue data
         orders_data = df_ts['orders'].values
         revenue_data = df_ts['revenue'].values
 
-        # Create histogram for orders
-        fig_orders_hist = go.Figure()
-        fig_orders_hist.add_trace(go.Histogram(
-            x=orders_data,
-            nbinsx=30,  # number of bins, adjust as needed
-            marker_color='green',
-            marker_line_color='black',   # border color
-            marker_line_width=1.5,       # border width (pixels)
-            opacity=0.65
-        ))
-        fig_orders_hist.update_layout(
-            title=f"Histogram of orders per last {time_ago}" if time_ago != 'Custom' else f"({start_datetime.strftime('%Y-%m-%d')} to {end_datetime.strftime('%Y-%m-%d')})",
-            xaxis_title="Number of Orders",
-            yaxis_title="Frequency",
-            bargap=0.2,
-            showlegend=False,
-            template="plotly_white"
-        )
+        c, cc = st.columns(2)
+        with c:
+            curs.execute("""
+            SELECT ToDateTime(ts, 'HH:mm:ss:SSS') AS dateTime, status, price, userId, productsOrdered, totalQuantity
+            FROM orders
+            ORDER BY ts DESC
+            LIMIT 10
+            """)
 
-        fig_revenue_hist = go.Figure()
-        fig_revenue_hist.add_trace(go.Histogram(
-            x=revenue_data,
-            nbinsx=30,
-            marker_color='blue',
-            marker_line_color='black',   # border color
-            marker_line_width=1.5,       # border width (pixels)
-            opacity=0.65
-        ))
-        fig_revenue_hist.update_layout(
-            title=f"Histogram of revenue for the last {time_ago}" if time_ago != 'Custom' else f"({start_datetime.strftime('%Y-%m-%d')} to {end_datetime.strftime('%Y-%m-%d')})",
-            xaxis_title="Revenue (€)",
-            yaxis_title="Frequency",
-            bargap=0.2,
-            showlegend=False,
-            template="plotly_white"
-        )
+            df = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
 
-        col_hist_orders, col_hist_revenue = st.columns(2)
-        with col_hist_orders:
-            st.plotly_chart(fig_orders_hist, use_container_width=True)
-            
-        with col_hist_revenue:
-            st.plotly_chart(fig_revenue_hist, use_container_width=True)
+            st.markdown("<div style='text-align: center;'>Latest Orders</div>", unsafe_allow_html=True)
+            st.data_editor(
+                df,
+                column_config={
+                    "dateTime": "Time",
+                    "status": "Status",
+                    "price": st.column_config.NumberColumn("Price", format="%.2f€"),
+                    "userId": st.column_config.NumberColumn("User ID", format="%d"),
+                    "productsOrdered": st.column_config.NumberColumn("Quantity", help="Quantity of distinct products ordered", format="%d"),
+                    "totalQuantity": st.column_config.NumberColumn("Total quantity", help="Total quantity ordered", format="%d"),
+                },
+                disabled=True,
+                use_container_width=True
+            )
+   
+        with cc:
+            st.markdown("### <div style='text-align: center;'>Distribution of Orders by Value Range</div>", unsafe_allow_html=True)
+
+            # Define revenue bins
+            revenue_bins = [0, 10, 20, 30, 50, 100, float('inf')]
+            bin_labels = ["0–10€", "10–20€", "20–30€", "30–50€", "50–100€", "100€+"]
+
+            # Cut revenue values into bins
+            binned = pd.cut(revenue_data, bins=revenue_bins, labels=bin_labels, right=False)
+
+            # Count number of orders per bin
+            bin_counts = binned.value_counts().sort_index()
+
+            fig_revenue_pie = go.Figure(data=[go.Pie(
+                labels=bin_counts.index,
+                values=bin_counts.values,
+                hole=0.4,  # donut style
+                marker=dict(line=dict(color='black', width=1))
+            )])
+
+            fig_revenue_pie.update_layout(
+                margin=dict(t=40, b=20),
+                showlegend=True
+            )
+
+            st.plotly_chart(fig_revenue_pie, use_container_width=True)
+
+    # First format time column into hourly buckets
+    df_orders['hour'] = df_orders['ts'].dt.strftime('%Y-%m-%d %H:00')
+
+
+    st.markdown("<br><br>", unsafe_allow_html=True) 
+
+    st.markdown("### <div style='text-align: center;'>Distribution of Order Prices</div>", unsafe_allow_html=True)
+
+    fig_box = go.Figure()
+    fig_box.add_trace(go.Box(
+        x=df_orders['hour'],
+        y=df_orders['price'],
+        boxpoints='outliers',
+        marker_color='DarkSlateBlue'
+    ))
+    fig_box.update_layout(
+        xaxis_title='Time (Hour)',
+        yaxis_title='Order Value (€)',
+        template='plotly_white'
+    )
+    st.plotly_chart(fig_box, use_container_width=True)
+
 
     left, right = st.columns(2)
 
-    with left:
-        curs.execute("""
-        SELECT ToDateTime(ts, 'HH:mm:ss:SSS') AS dateTime, status, price, userId, productsOrdered, totalQuantity
-        FROM orders
-        ORDER BY ts DESC
-        LIMIT 10
-        """)
+    st.markdown("<br><br>", unsafe_allow_html=True)
 
-        df = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
-        # Potential todo: convert time to datetime for better formatting in data_editor
-        st.subheader("Latest orders")
-        st.data_editor(
-            df,
-            column_config={
-                "dateTime": "Time",
-                "status": "Status",
-                "price": st.column_config.NumberColumn("Price", format="%.2f€"),
-                "userId": st.column_config.NumberColumn("User ID", format="%d"),
-                "productsOrdered": st.column_config.NumberColumn("Quantity", help="Quantity of distinct products ordered", format="%d"),
-                "totalQuantity": st.column_config.NumberColumn("Total quantity", help="Total quantity ordered", format="%d"),
-            },
-            disabled=True
+    with left:
+
+        st.markdown("### <div style='text-align: center;'>Top Users by Average Order Value (€)</div>", unsafe_allow_html=True)
+
+        df_avg_order_value = df_orders.groupby('userId').agg(
+            total_spent=('price', 'sum'),
+            order_count=('price', 'count')
+        ).assign(avg_order_value=lambda x: x['total_spent'] / x['order_count']).reset_index()
+
+        df_top_avg_users = df_avg_order_value.sort_values(by='avg_order_value', ascending=False).head(10)
+
+        fig_avg_order = go.Figure()
+        fig_avg_order.add_trace(go.Bar(
+            x=df_top_avg_users['avg_order_value'],
+            y=[f"User {uid}" for uid in df_top_avg_users['userId']],
+            orientation='h',
+            marker_color='DarkOrange',
+            marker_line_color='black',
+            marker_line_width=1.5, 
+            opacity=0.65
+        ))
+        fig_avg_order.update_layout(
+            xaxis=dict(
+                title='Avg Order Value (€)',
+                showgrid=True,         # Enable vertical gridlines
+                gridcolor='lightgray', # Optional: grid line color
+                gridwidth=1            # Optional: grid line width
+            ),
+            yaxis=dict(
+                autorange='reversed',
+                showgrid=True,         # Enable horizontal gridlines
+                gridcolor='lightgray',
+                gridwidth=1
+            ),
+            margin=dict(l=120, r=20, t=40, b=40), 
+            template='plotly_white'
         )
+        st.plotly_chart(fig_avg_order, use_container_width=True)
 
     with right:
         if not df_ts.empty:
-            st.subheader("Top 10 Users by Revenue")
+
+            st.markdown("### <div style='text-align: center;'>Top 10 Users by Revenue (€)</div>", unsafe_allow_html=True)
 
             if time_ago == "Custom":
                 top_users_start = start_datetime
@@ -411,8 +503,10 @@ if pinot_available:
     end_str_range = range_end.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     where_clause = f"ts BETWEEN '{start_str_range}' AND '{end_str_range}'"
 
+    st.markdown("<br><br>", unsafe_allow_html=True)
     with lefff:
-        st.subheader("Most popular categories")
+
+        st.markdown("### <div style='text-align: center;'>Most popular categories</div>", unsafe_allow_html=True)
 
         query_categories = f"""
             SELECT "product.category" AS category, 
@@ -439,13 +533,15 @@ if pinot_available:
                     "quantity": st.column_config.NumberColumn("Total quantity ordered", format="%d"),
                     "quantityPerOrder": st.column_config.NumberColumn("Average quantity per order", format="%d"),
                 },
-                disabled=True
+                disabled=True,
+                use_container_width=True
             )
         else:
             st.info("No data available for selected period.")
 
     with riggg:
-        st.subheader("Most popular items")
+
+        st.markdown("### <div style='text-align: center;'>Most popular items</div>", unsafe_allow_html=True)
 
         query_products = f"""
             SELECT "product.name" AS product, 
@@ -479,11 +575,14 @@ if pinot_available:
             )
         else:
             st.info("No data available for selected period.")
-
+    
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    
     A, B = st.columns(2) 
 
     with A:
-        st.subheader("Order Activity Heatmap")
+        
+        st.markdown("### <div style='text-align: center;'>Order Activity Heatmap</div>", unsafe_allow_html=True)
 
         filter_option = st.radio(
             "Select heatmap data range",
@@ -587,7 +686,9 @@ if pinot_available:
             st.info("No data available to render heatmap for the selected period.")
 
     with B:
-        st.subheader("Revenue Contribution by Product Category")
+
+        st.markdown("### <div style='text-align: center;'>Revenue Contribution by Product Category</div>", unsafe_allow_html=True)
+        
         st.caption("Displays the total revenue generated by each product category for the selected time period.")
         
         query_treemap = f"""
@@ -626,8 +727,9 @@ if pinot_available:
         else:
             st.info("No revenue data available for selected time range.")
 
-    st.subheader("Sales Over Time")
-    
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    st.markdown("### <div style='text-align: center;'>Sales Over Time</div>", unsafe_allow_html=True)
+      
     # Check if we should show the chart
     show_chart = True
     if time_ago != "Custom":
@@ -726,8 +828,7 @@ if pinot_available:
             ))
             
             fig_sales.update_layout(
-                title=f"Sales Over Time ({start_datetime.strftime('%Y-%m-%d')} to {end_datetime.strftime('%Y-%m-%d')})",
-                xaxis=dict(
+                 xaxis=dict(
                     title=xaxis_title,
                     type='category',
                     tickmode='array',
