@@ -411,9 +411,9 @@ if pinot_available:
         fig_avg_order = go.Figure()
         fig_avg_order.add_trace(go.Bar(
             x=df_top_avg_users['avg_order_value'],
-            y=[f"User {uid}" for uid in df_top_avg_users['userId']],
+            y=[f"User ID: {uid}" for uid in df_top_avg_users['userId']],
             orientation='h',
-            marker_color='LightCoral',
+            marker_color='LightGreen',
             marker_line_color='black',
             marker_line_width=1.5, 
             opacity=0.65
@@ -423,13 +423,13 @@ if pinot_available:
                 title='Avg Order Value (€)',
                 showgrid=True,         # Enable vertical gridlines
                 gridcolor='lightgray', # Optional: grid line color
-                gridwidth=1            # Optional: grid line width
+                gridwidth=1,            # Optional: grid line width
+                zeroline=True,
+                zerolinecolor='gray'
             ),
             yaxis=dict(
-                autorange='reversed',
-                showgrid=True,         # Enable horizontal gridlines
-                gridcolor='lightgray',
-                gridwidth=1
+                title="User",
+                autorange='reversed'
             ),
             margin=dict(l=120, r=20, t=40, b=40), 
             template='plotly_white'
@@ -641,13 +641,13 @@ if pinot_available:
 
         if not df_heatmap.empty:
             day_map = {
-                1: "Sunday",
-                2: "Monday",
-                3: "Tuesday",
-                4: "Wednesday",
-                5: "Thursday",
-                6: "Friday",
-                7: "Saturday"
+                1: "Monday",
+                2: "Tuesday",
+                3: "Wednesday",
+                4: "Thursday",
+                5: "Friday",
+                6: "Saturday",
+                7: "Sunday"
             }
             
             df_heatmap['day'] = df_heatmap['day'].map(day_map)
