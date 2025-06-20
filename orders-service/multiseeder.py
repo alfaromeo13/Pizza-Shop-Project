@@ -123,14 +123,14 @@ try:
             cursor.execute("SELECT id, price FROM pizzashop.products")
             product_prices = [(row[0], row[1]) for row in cursor]
 
-            # Generate historical data for full year of 2024
+            # Generate historical data from 2023 to today.
             start_time = time.time()
             start_date = date(2023, 1, 1)
             end_date = datetime.now().date()
             days_total = (end_date - start_date).days + 1
 
             for single_day in daterange_weekdays(start_date, end_date):
-                num_orders_today = random.randint(120, 250)  # realistic daily volume
+                num_orders_today = random.randint(400, 800)  # denser historical volume
 
                 for _ in range(num_orders_today):
                     user = random.choice(users)
@@ -142,17 +142,17 @@ try:
                     producer.send('orders', event, bytes(event["id"].encode("UTF-8")))
                     events_processed += 1
 
-                    if events_processed % 100    == 0:
-                        print(f"Generated {events_processed:,} events so far...")
+                    if events_processed % 100 == 0:
                         producer.flush()
 
             producer.flush()
 
             print(f"Finished generating {events_processed:,} orders across {days_total} days in {time.time() - start_time:.2f} seconds.")
 
-            # Live order simulation
+            
             events_processed = 0
 
+            # Live order simulation
             while True:
                 user = random.choice(users)
                 items = generate_items(product_prices, random.randint(1, 6))
@@ -161,10 +161,9 @@ try:
                 events_processed += 1
 
                 if events_processed % 10 == 0: 
-                    producer.flush()
+                    producer.flush() # TODO: ovo napravi da je smislno
 
                 time.sleep(random.randint(orderInterval/5, orderInterval)/1000)
-
 
     connection.close()
 except Error as e:
