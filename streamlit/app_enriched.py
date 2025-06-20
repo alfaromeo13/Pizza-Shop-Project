@@ -79,7 +79,8 @@ pinot_host = os.environ.get("PINOT_SERVER", "pinot-broker")
 pinot_port = os.environ.get("PINOT_PORT", 8099)
 conn = connect(pinot_host, pinot_port)
 st.set_page_config(layout="wide")
-st.title("Pizza Shop orders analytics 🍕")
+
+st.markdown("<h1 style='text-align: center;'>Pizza Shop orders analytics 🍕</h1><br>", unsafe_allow_html=True)
 
 mapping2 = {
     "1 hour": {"minutes": 60, "previous": 120, "granularity": "minute"},
@@ -316,7 +317,7 @@ if pinot_available:
 
             df = pd.DataFrame(curs, columns=[item[0] for item in curs.description])
 
-            st.markdown("<div style='text-align: center;'>Latest Orders</div>", unsafe_allow_html=True)
+            st.markdown("### <div style='text-align: center;'>Latest Orders</div>", unsafe_allow_html=True)
             st.data_editor(
                 df,
                 column_config={
@@ -361,11 +362,10 @@ if pinot_available:
     # First format time column into hourly buckets
     df_orders['hour'] = df_orders['ts'].dt.strftime('%Y-%m-%d %H:00')
 
-
     st.markdown("<br><br>", unsafe_allow_html=True) 
 
-    st.markdown("### <div style='text-align: center;'>Distribution of Order Prices</div>", unsafe_allow_html=True)
-
+    st.markdown("""<h3 style='text-align: center; margin-bottom: 5px;'>Distribution of Order Prices</h3>""", unsafe_allow_html=True)
+    
     fig_box = go.Figure()
     fig_box.add_trace(go.Box(
         x=df_orders['hour'],
@@ -376,14 +376,26 @@ if pinot_available:
     fig_box.update_layout(
         xaxis_title='Time (Hour)',
         yaxis_title='Order Value (€)',
-        template='plotly_white'
+        template='plotly_white',
+        height=600,  # Increase height for better vertical scale
+        margin=dict(t=40, b=60),  # Reduce space above and below the title/chart
+        yaxis=dict(
+            title_font=dict(size=14),
+            tickfont=dict(size=12),
+            automargin=True
+        ),
+        xaxis=dict(
+            title_font=dict(size=14),
+            tickfont=dict(size=12),
+            automargin=True
+        )
     )
+
     st.plotly_chart(fig_box, use_container_width=True)
 
+    st.markdown("<br><br>", unsafe_allow_html=True)
 
     left, right = st.columns(2)
-
-    st.markdown("<br><br>", unsafe_allow_html=True)
 
     with left:
 
@@ -401,7 +413,7 @@ if pinot_available:
             x=df_top_avg_users['avg_order_value'],
             y=[f"User {uid}" for uid in df_top_avg_users['userId']],
             orientation='h',
-            marker_color='DarkOrange',
+            marker_color='LightCoral',
             marker_line_color='black',
             marker_line_width=1.5, 
             opacity=0.65
@@ -487,6 +499,8 @@ if pinot_available:
                 )
 
                 st.plotly_chart(fig_top_users, use_container_width=True)
+    
+    st.markdown("<br><br>", unsafe_allow_html=True)
 
     lefff, riggg = st.columns(2)
 
@@ -503,7 +517,6 @@ if pinot_available:
     end_str_range = range_end.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     where_clause = f"ts BETWEEN '{start_str_range}' AND '{end_str_range}'"
 
-    st.markdown("<br><br>", unsafe_allow_html=True)
     with lefff:
 
         st.markdown("### <div style='text-align: center;'>Most popular categories</div>", unsafe_allow_html=True)
@@ -584,18 +597,22 @@ if pinot_available:
         
         st.markdown("### <div style='text-align: center;'>Order Activity Heatmap</div>", unsafe_allow_html=True)
 
-        filter_option = st.radio(
-            "Select heatmap data range",
-            options=["Last 7 days", "Last 30 days", "All time"],
-            index=0,  # Default to "Last 7 days"
-            horizontal=True
-        )
+        if time_ago != "Custom":
+            filter_option = st.radio(
+                "Select heatmap data range",
+                options=["Last 7 days", "Last 30 days", "All time"],
+                index=0,  # Default to "Last 7 days"
+                horizontal=True
+            )
+        else:
+            filter_option = None  # Not used when Custom is selected
 
         if time_ago == "Custom":
             heatmap_start = start_datetime
             heatmap_end = end_datetime + timedelta(seconds=1)
         else:
             now = datetime.now()
+          
             if filter_option == "Last 7 days":
                 heatmap_start = now - timedelta(days=7)
             elif filter_option == "Last 30 days":
@@ -607,10 +624,6 @@ if pinot_available:
         # Format times for SQL
         heatmap_start_str = heatmap_start.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         heatmap_end_str = heatmap_end.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-
-        # Warn if less than 7 full days selected
-        if (heatmap_end - heatmap_start).days < 7:
-            st.warning("The selected period is less than 7 days. Some days may be missing from the heatmap.")
 
         query_heatmap = f"""
             SELECT 
@@ -636,6 +649,7 @@ if pinot_available:
                 6: "Friday",
                 7: "Saturday"
             }
+            
             df_heatmap['day'] = df_heatmap['day'].map(day_map)
 
             # Pivot to matrix format
@@ -654,7 +668,8 @@ if pinot_available:
             for day in heatmap_matrix.index:
                 row = []
                 for hour in heatmap_matrix.columns:
-                    count = int(heatmap_matrix.loc[day, hour])
+                    value = heatmap_matrix.loc[day, hour]
+                    count = int(value) if pd.notna(value) else 0
                     row.append(f"{day}, {hour:02}h: {count} orders")
                 hover_text.append(row)
 
@@ -670,7 +685,6 @@ if pinot_available:
             ))
 
             fig_heatmap.update_layout(
-                title="Order Volume Heatmap (Day of Week × Hour)",
                 xaxis=dict(
                     title="Hour of Day",
                     tickmode='array',
@@ -687,10 +701,10 @@ if pinot_available:
 
     with B:
 
-        st.markdown("### <div style='text-align: center;'>Revenue Contribution by Product Category</div>", unsafe_allow_html=True)
-        
-        st.caption("Displays the total revenue generated by each product category for the selected time period.")
-        
+        st.markdown("""
+            <h3 style='text-align: center; margin-bottom: 5px;'>Revenue Contribution by Product Category</h3>
+        """, unsafe_allow_html=True)
+
         query_treemap = f"""
             SELECT product.category AS category, SUM(product.price) AS revenue
             FROM order_items_enriched
@@ -747,15 +761,25 @@ if pinot_available:
         if 'sales_granularity' not in st.session_state:
             st.session_state.sales_granularity = "MONTHLY"
         
-        # Centered buttons using columns
-        cols = st.columns((2, 1, 1, 2))  # Wider spacing for better centering
-        with cols[1]:
-            if st.button("Monthly View", key="monthly_view_btn"):
-                st.session_state.sales_granularity = "MONTHLY"
-        with cols[2]:
-            if st.button("Yearly View", key="yearly_view_btn"):
-                st.session_state.sales_granularity = "YEARLY"
-        
+        display_to_value = {"Monthly": "MONTHLY", "Yearly": "YEARLY"}
+        value_to_display = {v: k for k, v in display_to_value.items()}
+
+        # Get current display value based on session state
+        current_display = value_to_display.get(st.session_state.get("sales_granularity", "MONTHLY"), "Monthly")
+
+        # Render radio with friendly labels
+        selected_display = st.radio(
+            "Select Granularity",
+            options=["Monthly", "Yearly"],
+            index=["Monthly", "Yearly"].index(current_display),
+            key="granularity_radio",
+            horizontal=True
+        )
+
+        # Save selected internal value back to session state
+        st.session_state.sales_granularity = display_to_value[selected_display]
+
+
         # Query based on granularity
         if st.session_state.sales_granularity == "MONTHLY":
             sales_query = f"""
