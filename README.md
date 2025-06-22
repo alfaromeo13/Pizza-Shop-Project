@@ -7,6 +7,10 @@ Only prerequisites is to have docker installed on your machine before starting t
 
 ![Architecture Diagram](images/archtecture.png)
 
+## Project Video Demo
+
+[Watch the video demo on YouTube](https://youtu.be/zPQ6aUIUfho)
+
 ## How to Run the Demo
 
 First to build project run 
