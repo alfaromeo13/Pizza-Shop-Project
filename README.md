@@ -9,7 +9,7 @@ Only prerequisites is to have docker installed on your machine before starting t
 
 ## How to Run the Demo
 
-If you had just pulled this project you first need to build everything with 
+First to build project run 
 
 ```bash
 docker-compose build
@@ -42,5 +42,5 @@ After the demo is up and running, you can access the following interfaces in you
 To stop all the services and clean up the resources used run the following:
 
 ```bash
-docker compose down -v
+docker compose down
 ```
